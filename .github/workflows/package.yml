@@ -27,7 +27,7 @@ jobs:
       - name: Compile
         run: |
           cd build/addons/sourcemod/scripting
-          ./spcomp tf2_custom_taunts.sp -o ../plugins/textstore.smx
+          ./spcomp tf2_custom_taunts.sp -o ../plugins/tf2_custom_taunts.smx
       
       - name: Package
         run: |
