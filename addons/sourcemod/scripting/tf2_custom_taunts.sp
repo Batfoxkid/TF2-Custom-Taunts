@@ -107,6 +107,8 @@ public void OnPluginStart()
 
 	delete gameData;
 
+	CreateConVar("customtaunts_version", PLUGIN_VERSION, "Custom Taunts Plugin Version", FCVAR_NOTIFY|FCVAR_DONTRECORD);
+
 	AddNormalSoundHook(HookSound);
 
 	RegConsoleCmd("sm_taunt", CommandMenu, "Open a menu of taunts");
