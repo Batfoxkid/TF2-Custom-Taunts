@@ -7,7 +7,7 @@
 
 #pragma newdecls required
 
-#define PLUGIN_VERSION "0.1.0"
+#define PLUGIN_VERSION "0.1.1"
 
 #define FAR_FUTURE		100000000.0
 #define MAX_SOUND_LENGTH	80
@@ -202,7 +202,7 @@ public void OnConfigsExecuted()
 			}
 			else if(FileExists(buffer, true))
 			{
-				PrecacheSound(Models[Taunts][MODELS].New, true);
+				PrecacheSound(Models[Taunts][MODELS].Sound, true);
 			}
 			else
 			{
