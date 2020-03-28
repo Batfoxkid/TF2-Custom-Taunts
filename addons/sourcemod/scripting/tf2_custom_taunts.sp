@@ -115,6 +115,8 @@ public void OnPluginStart()
 	RegConsoleCmd("sm_taunts", CommandList, "View a list of taunt ids");
 	HookEvent("post_inventory_application", OnPlayerSpawn, EventHookMode_Pre);
 	HookEvent("player_death", OnPlayerDeath, EventHookMode_Pre);
+	AddCommandListener(OnJoinClass, "joinclass");
+	AddCommandListener(OnJoinClass, "join_class");
 
 	LoadTranslations("common.phrases");
 
@@ -285,6 +287,20 @@ public Action OnPlayerDeath(Event event, const char[] name, bool dontBroadcast)
 		EndTaunt(client, false);
 
 	return Plugin_Continue;
+}
+
+public Action OnJoinClass(int client, const char[] command, int args)
+{
+	if(Client[client].Taunt==-1 || !Models[Client[client].Taunt][Client[client].Model].Replace[0])
+		return Plugin_Continue;
+
+	static char arg[16];
+	GetCmdArg(1, arg, sizeof(arg));
+	TFClassType class = TF2_GetClass(arg);
+	if(class != TFClass_Unknown)
+		SetEntProp(client, Prop_Send, "m_iDesiredPlayerClass", class);
+
+	return Plugin_Handled;
 }
 
 public void OnGameFrame()
@@ -541,7 +557,7 @@ public Action CommandMenu(int client, int args)
 		if(model != -1)
 			StartTaunt(targets[target], taunt, model);
 	}
-				
+	
 	if(tn_is_ml)
 	{
 		ShowActivity2(client, "[SM] ", "Forced taunt on %t", targetName);
@@ -601,7 +617,7 @@ public Action CommandList(int client, int args)
 
 stock bool CheckTauntAccess(int client, int taunt)
 {
-	if(taunt<0 || taunt>=MAXTAUNTS)
+	if(taunt<0 || taunt>=Taunts)
 		return false;
 
 	if(Taunt[taunt].Admin && !CheckCommandAccess(client, "customtaunts_all", Taunt[taunt].Admin, true))
