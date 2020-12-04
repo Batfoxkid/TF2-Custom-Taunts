@@ -37,7 +37,7 @@
 #define CONFIG_PATH	"configs/customtaunts.cfg"
 
 #define MAXNAME		64
-#define MAXTAUNTS	64
+#define MAXTAUNTS	128
 #define MAXSOUNDS	12
 #define MAXMODELS	12
 
