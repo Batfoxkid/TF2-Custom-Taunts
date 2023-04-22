@@ -226,6 +226,11 @@ public void OnConfigsExecuted()
 			{
 				kv.GetSectionName(Sound[Taunts][MODELS][SOUNDS].Replace, PLATFORM_MAX_PATH);
 				kv.GetString("sound", Sound[Taunts][MODELS][SOUNDS].New, PLATFORM_MAX_PATH, "vo/null.mp3");
+				FormatEx(buffer, PLATFORM_MAX_PATH, "sound/%s", Sound[Taunts][MODELS][SOUNDS].New);
+				if (FileExists(buffer, true) && strcmp(buffer, "sound/vo/null.mp3") != 0)
+				{
+					PrecacheSound(Sound[Taunts][MODELS][SOUNDS].New, true);
+				}
 				SOUNDS++;
 			} while(SOUNDS<MAXSOUNDS && kv.GotoNextKey());
 			MODELS++;
@@ -666,5 +671,3 @@ stock bool IsValidClient(int client)
 
 	return true;
 }
-
-#file "TF2: Custom Taunts"
