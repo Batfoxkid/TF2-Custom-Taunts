@@ -29,7 +29,7 @@
 #define MAX_NUM_LENGTH		5
 #define VOID_ARG		-1
 
-#define MAXTF2PLAYERS	36
+#define MAXTF2PLAYERS	MAXPLAYERS+1
 #define TAUNT		Client[client].Taunt
 #define MODELS		Taunt[Taunts].Models
 #define SOUNDS		Models[Taunts][Taunt[Taunts].Models].Sounds
