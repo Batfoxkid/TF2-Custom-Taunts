@@ -52,6 +52,10 @@ enum struct ModelEnum
 	char Replace[PLATFORM_MAX_PATH];
 	char Sound[PLATFORM_MAX_PATH];
 	char New[PLATFORM_MAX_PATH];
+	bool IsSoundBlock;
+	bool IsMusicBlock;
+	bool IsHideWeapon;
+	bool IsHideHat;
 	float Duration;
 	float Speed;
 	int Sounds;
@@ -114,11 +118,13 @@ public void OnPluginStart()
 	RegConsoleCmd("sm_taunt", CommandMenu, "Open a menu of taunts");
 	RegConsoleCmd("sm_taunts", CommandList, "View a list of taunt ids");
 	HookEvent("post_inventory_application", OnPlayerSpawn, EventHookMode_Pre);
-	HookEvent("player_death", OnPlayerDeath, EventHookMode_Pre);
+	HookEvent("player_death", OnPlayerDeath, EventHookMode_Post);
 	AddCommandListener(OnJoinClass, "joinclass");
 	AddCommandListener(OnJoinClass, "join_class");
 
 	LoadTranslations("common.phrases");
+
+	HookUserMessage(GetUserMessageId("PlayerTauntSoundLoopStart"), HookTauntMessage, true);
 
 	for(int i; i<MAXTF2PLAYERS; i++)
 	{
@@ -212,6 +218,10 @@ public void OnConfigsExecuted()
 				Models[Taunts][MODELS].Sound[0] = 0;
 			}
 
+			Models[Taunts][MODELS].IsSoundBlock = (kv.GetNum("existing_sound_block", 0)) ? true : false;
+			Models[Taunts][MODELS].IsMusicBlock = (kv.GetNum("existing_music_block", 0)) ? true : false;
+			Models[Taunts][MODELS].IsHideWeapon = (kv.GetNum("hide_weapon", 0)) ? true : false;
+			Models[Taunts][MODELS].IsHideHat = (kv.GetNum("hide_hat", 0)) ? true : false;
 			Models[Taunts][MODELS].Speed = kv.GetFloat("speed", 1.0);
 			Models[Taunts][MODELS].Duration = kv.GetFloat("duration");
 
@@ -299,13 +309,17 @@ public Action OnJoinClass(int client, const char[] command, int args)
 	if(Client[client].Taunt==-1 || !Models[Client[client].Taunt][Client[client].Model].Replace[0])
 		return Plugin_Continue;
 
+	EndTaunt(client, true);
+
+	/*
 	static char arg[16];
 	GetCmdArg(1, arg, sizeof(arg));
 	TFClassType class = TF2_GetClass(arg);
 	if(class != TFClass_Unknown)
 		SetEntProp(client, Prop_Send, "m_iDesiredPlayerClass", class);
+	*/
 
-	return Plugin_Handled;
+	return Plugin_Continue;
 }
 
 public void OnGameFrame()
@@ -326,6 +340,17 @@ public void OnGameFrame()
 	}
 }
 
+public Action HookTauntMessage(UserMsg msg_id, BfRead msg, const int[] players, int playersNum, bool reliable, bool init)
+{
+	int byte = msg.ReadByte();
+
+	if (Client[byte].Taunt < 0 || Client[byte].Model < 0)return Plugin_Continue;
+
+	if (Models[Client[byte].Taunt][Client[byte].Model].IsMusicBlock)return Plugin_Handled;
+
+	return Plugin_Continue;
+}
+
 public Action HookSound(int clients[MAXPLAYERS], int &numClients, char sound[PLATFORM_MAX_PATH], int &client, int &channel, float &volume, int &level, int &pitch, int &flags, char soundEntry[PLATFORM_MAX_PATH], int &seed)
 {
 	if(!IsValidClient(client) || !TF2_IsPlayerInCondition(client, TFCond_Taunting) || Client[client].Taunt<0 || Client[client].Model<0)
@@ -341,6 +366,11 @@ public Action HookSound(int clients[MAXPLAYERS], int &numClients, char sound[PLA
 
 		strcopy(sound, PLATFORM_MAX_PATH, Sound[Client[client].Taunt][Client[client].Model][i].New);
 		return Plugin_Changed;
+	}
+
+	if (Models[Client[client].Taunt][Client[client].Model].IsSoundBlock && !StrEqual(Models[Client[client].Taunt][Client[client].Model].Sound, sound))
+	{
+		return Plugin_Stop;
 	}
 	return Plugin_Continue;
 }
@@ -372,7 +402,21 @@ void EndTaunt(int client, bool remove)
 		return;
 	}
 
-	SetVariantString(Models[Client[client].Taunt][Client[client].Model].Replace);
+	HideWeapons(client, true);
+	HideHat(client, true);
+
+	switch (TF2_GetPlayerClass(client))
+	{
+		case TFClass_Scout:SetVariantString("models/player/scout.mdl");
+		case TFClass_Pyro:SetVariantString("models/player/pyro.mdl");
+		case TFClass_DemoMan:SetVariantString("models/player/demo.mdl");
+		case TFClass_Heavy:SetVariantString("models/player/heavy.mdl");
+		case TFClass_Engineer:SetVariantString("models/player/engineer.mdl");
+		case TFClass_Medic:SetVariantString("models/player/medic.mdl");
+		case TFClass_Sniper:SetVariantString("models/player/sniper.mdl");
+		case TFClass_Spy:SetVariantString("models/player/spy.mdl");
+		default:SetVariantString("models/player/soldier.mdl");
+	}
 	AcceptEntityInput(client, "SetCustomModel");
 	SetEntProp(client, Prop_Send, "m_bUseClassAnimations", 1);
 	Client[client].Taunt = -1;
@@ -441,6 +485,16 @@ bool StartTaunt(int client, int taunt, int model)
 
 	if(Models[taunt][model].Duration > 0)
 		TF2Attrib_SetByDefIndex(client, 201, Models[taunt][model].Speed);
+
+	if (Models[taunt][model].IsHideWeapon)
+	{
+		HideWeapons(client, false);
+	}
+
+	if (Models[taunt][model].IsHideHat)
+	{
+		HideHat(client, false);
+	}
 
 	Client[client].Taunt = taunt;
 	Client[client].Model = model;
@@ -590,20 +644,21 @@ public int CommandMenuH(Menu menu, MenuAction action, int client, int choice)
 			if(!CheckTauntAccess(client, taunt))
 			{
 				ReplyToCommand(client, "[SM] You no longer have access to this taunt");
-				return;
+				return 0;
 			}
 
 			int model = CheckTauntModel(client, taunt);
 			if(model == -1)
 			{
 				ReplyToCommand(client, "[SM] You no longer use this taunt");
-				return;
+				return 0;
 			}
 
 			if(StartTaunt(client, taunt, model))
 				CommandMenu(client, 0);
 		}
 	}
+	return 0;
 }
 
 public Action CommandList(int client, int args)
@@ -616,6 +671,8 @@ public Action CommandList(int client, int args)
 
 	if(GetCmdReplySource() == SM_REPLY_TO_CHAT)
 		ReplyToCommand(client, "[SM] %t", "See console for output");
+
+	return Plugin_Handled;
 }
 
 // Stocks
@@ -670,4 +727,74 @@ stock bool IsValidClient(int client)
 		return false;
 
 	return true;
+}
+
+stock void HideWeapons(int client, bool unhide = false)
+{
+	HideWeaponWearables(client, unhide);
+	int m_hMyWeapons = FindSendPropInfo("CTFPlayer", "m_hMyWeapons");
+	
+	char classname[64];
+	for (int i = 0, weapon; i < 47; i += 4)
+	{
+		weapon = GetEntDataEnt2(client, m_hMyWeapons + i);
+		
+		if (weapon > MaxClients && IsValidEdict(weapon) && GetEdictClassname(weapon, classname, sizeof(classname)) && StrContains(classname, "weapon") != -1)
+		{
+			SetEntityRenderMode(weapon, (unhide ? RENDER_NORMAL : RENDER_ENVIRONMENTAL));
+			SetEntityRenderColor(weapon, 255, 255, 255, (unhide ? 255 : 5));
+		}
+	}
+}
+stock void HideWeaponWearables(int client, bool unhide = false)
+{
+	int edict = MaxClients + 1;
+	
+	char netclass[32];
+	while ((edict = FindEntityByClassname(edict, "tf_wearable")) != -1)
+	{
+		if (GetEntityNetClass(edict, netclass, sizeof(netclass)) && strcmp(netclass, "CTFWearable") == 0)
+		{
+			int idx = GetEntProp(edict, Prop_Send, "m_iItemDefinitionIndex");
+			if (idx != 57 && idx != 133 && idx != 231 && idx != 444 && idx != 405 && idx != 608 && idx != 642)continue;
+			if (GetEntPropEnt(edict, Prop_Send, "m_hOwnerEntity") == client)
+			{
+				SetEntityRenderMode(edict, (unhide ? RENDER_NORMAL : RENDER_ENVIRONMENTAL));
+				SetEntityRenderColor(edict, 255, 255, 255, (unhide ? 255 : 0));
+			}
+		}
+	}
+}
+
+stock void HideHat(int client, bool unhide = false)
+{
+	int edict = MaxClients + 1;
+	char netclass[32];
+	
+	while ((edict = FindEntityByClassname(edict, "tf_wearable")) != -1)
+	{
+		
+		if (GetEntityNetClass(edict, netclass, sizeof(netclass)) && strcmp(netclass, "CTFWearable") == 0)
+		{
+			int idx = GetEntProp(edict, Prop_Send, "m_iItemDefinitionIndex");
+			if (idx != 57 && idx != 133 && idx != 231 && idx != 444 && idx != 405 && idx != 608 && idx != 642 && GetEntPropEnt(edict, Prop_Send, "m_hOwnerEntity") == client)
+			{
+				SetEntityRenderMode(edict, (unhide ? RENDER_NORMAL : RENDER_ENVIRONMENTAL));
+				SetEntityRenderColor(edict, 255, 255, 255, (unhide ? 255 : 0));
+			}
+		}
+	}
+	edict = MaxClients + 1;
+	while ((edict = FindEntityByClassname(edict, "tf_powerup_bottle")) != -1)
+	{
+		if (GetEntityNetClass(edict, netclass, sizeof(netclass)) && strcmp(netclass, "CTFPowerupBottle") == 0)
+		{
+			int idx = GetEntProp(edict, Prop_Send, "m_iItemDefinitionIndex");
+			if (idx != 57 && idx != 133 && idx != 231 && idx != 444 && idx != 405 && idx != 608 && idx != 642 && GetEntPropEnt(edict, Prop_Send, "m_hOwnerEntity") == client)
+			{
+				SetEntityRenderMode(edict, (unhide ? RENDER_NORMAL : RENDER_ENVIRONMENTAL));
+				SetEntityRenderColor(edict, 255, 255, 255, (unhide ? 255 : 0));
+			}
+		}
+	}
 }
