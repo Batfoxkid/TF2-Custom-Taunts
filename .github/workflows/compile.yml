@@ -7,20 +7,32 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        sm-version: [ '1.11.x', '1.12.x']
     
     steps:
-      - name: Checkout
+      - name: Install Checkout
         uses: actions/checkout@v1
       
-      - name: Environments
-        run: |
-          echo "SM_VERSION=1.10" >> $GITHUB_ENV
+      - name: Install Setup SP ${{ matrix.sm-version }}
+        uses: rumblefrog/setup-sp@master
+        with:
+          version: ${{ matrix.sm-version }}
       
-      - name: Install
+      - name: Get GitHub Env
         run: |
-          bash scripts/install.sh
+          echo "PLUGIN_VERSION_REVISION<<EOF" >> $GITHUB_ENV
+          git rev-list --count HEAD >> $GITHUB_ENV
+          echo 'EOF' >> $GITHUB_ENV
       
-      - name: Compile
+      - name: Install Misc
         run: |
-          cd build/addons/sourcemod/scripting
-          ./spcomp -E tf2_custom_taunts.sp -o ../plugins/tf2_custom_taunts.smx
+          cd addons/sourcemod/scripting/include
+          wget "https://raw.githubusercontent.com/FlaminSarge/tf2attributes/master/scripting/include/tf2attributes.inc"
+          wget "https://raw.githubusercontent.com/nosoop/SMExt-TF2Items/main/pawn/tf2items.inc"
+        working-directory: ./
+      
+      - name: Compile ${{ matrix.sm-version }}
+        run: spcomp -E -O2 -v2 -i "include" -o "tf2_custom_taunts" tf2_custom_taunts.sp
+        working-directory: addons/sourcemod/scripting

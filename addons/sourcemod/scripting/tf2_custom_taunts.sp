@@ -1,105 +1,207 @@
-#pragma semicolon 1
-
 #include <sourcemod>
+#include <sdkhooks>
 #include <tf2_stocks>
-#include <tf2attributes>
 #include <tf2items>
+#include <tf2attributes>
+#undef REQUIRE_EXTENSIONS
+#undef REQUIRE_PLUGIN
 
+#pragma semicolon 1
 #pragma newdecls required
 
-#define PLUGIN_VERSION "0.1.1"
+#define PLUGIN_VERSION			"1"
+#define PLUGIN_VERSION_REVISION	"custom"
+#define PLUGIN_VERSION_FULL		PLUGIN_VERSION ... "." ... PLUGIN_VERSION_REVISION
 
-#define FAR_FUTURE		100000000.0
-#define MAX_SOUND_LENGTH	80
-#define MAX_MODEL_LENGTH	128
-#define MAX_MATERIAL_LENGTH	128
-#define MAX_ENTITY_LENGTH	48
-#define MAX_EFFECT_LENGTH	48
-#define MAX_ATTACHMENT_LENGTH	48
-#define MAX_ICON_LENGTH		48
-#define MAX_INFO_LENGTH		128
-#define HEX_OR_DEC_LENGTH	12
-#define MAX_ATTRIBUTE_LENGTH	256
-#define MAX_CONDITION_LENGTH	256
-#define MAX_CLASSNAME_LENGTH	64
-#define MAX_PLUGIN_LENGTH	64
-#define MAX_ITEM_LENGTH		48
-#define MAX_DESC_LENGTH		256
-#define MAX_TITLE_LENGTH	192
-#define MAX_NUM_LENGTH		5
-#define VOID_ARG		-1
-
-#define MAXTF2PLAYERS	MAXPLAYERS+1
-#define TAUNT		Client[client].Taunt
-#define MODELS		Taunt[Taunts].Models
-#define SOUNDS		Models[Taunts][Taunt[Taunts].Models].Sounds
-
-#define CONFIG_PATH	"configs/customtaunts.cfg"
-
-#define MAXNAME		64
-#define MAXTAUNTS	128
-#define MAXSOUNDS	12
-#define MAXMODELS	12
+#define FILE_TAUNTS		"configs/custom_taunts/taunts.cfg"
 
 enum struct SoundEnum
 {
+	char Match[PLATFORM_MAX_PATH];
 	char Replace[PLATFORM_MAX_PATH];
-	char New[PLATFORM_MAX_PATH];
+
+	void Setup(KeyValues kv)
+	{
+		kv.GetSectionName(this.Match, sizeof(this.Match));
+		kv.GetString("sound", this.Replace, sizeof(this.Replace), "vo/null.mp3");
+	}
 }
 
 enum struct ModelEnum
 {
+	char Match[PLATFORM_MAX_PATH];
+	ArrayList Sounds;
+	
 	char Replace[PLATFORM_MAX_PATH];
 	char Sound[PLATFORM_MAX_PATH];
-	char New[PLATFORM_MAX_PATH];
-	bool IsSoundBlock;
-	bool IsMusicBlock;
-	bool IsHideWeapon;
-	bool IsHideHat;
+	float SoundVolume;
+	int SoundLevel;
+	bool BlockSound;
+	bool BlockMusic;
+	bool HideWeapon;
+	bool HideCosmetic;
+	bool BodyModel;
 	float Duration;
 	float Speed;
-	int Sounds;
 	int Index;
 	TFClassType Class;
+
+	void Setup(KeyValues kv)
+	{
+		kv.GetSectionName(this.Match, sizeof(this.Match));
+		ReplaceString(this.Match, sizeof(this.Match), "\\", "/");
+
+		this.Index = kv.GetNum("index");
+
+		bool all = StrEqual(this.Match, "any", false);
+		if(!all)
+		{
+			this.Class = TF2_GetClass(this.Match);
+			if(this.Class != TFClass_Unknown)
+				all = true;
+		}
+		
+		if(all)
+		{
+			this.Match[0] = 0;
+			this.Replace[0] = 0;
+		}
+		else
+		{
+			kv.GetString("model", this.Replace, sizeof(this.Replace));
+			if(this.Replace[0])
+			{
+				ReplaceString(this.Replace, sizeof(this.Replace), "\\", "/");
+
+				if(StrEqual(this.Replace, this.Match, false))
+				{
+					this.Replace[0] = 0;
+				}
+				else if(FileExists(this.Replace, true))
+				{
+					PrecacheModel(this.Replace);
+				}
+				else
+				{
+					LogError("'%s' has missing model '%s'.", this.Match, this.Replace);
+					this.Replace[0] = 0;
+				}
+			}
+		}
+
+		this.BlockSound = view_as<bool>(kv.GetNum("block_sound", kv.GetNum("existing_sound_block")));
+		this.BlockMusic = view_as<bool>(kv.GetNum("block_music", kv.GetNum("existing_music_block")));
+		this.HideWeapon = view_as<bool>(kv.GetNum("hide_weapon"));
+		this.HideCosmetic = view_as<bool>(kv.GetNum("hide_hat"));
+		this.BodyModel = view_as<bool>(kv.GetNum("bodymodel"));
+		this.Speed = kv.GetFloat("speed", 1.0);
+		this.Duration = kv.GetFloat("duration");
+
+		kv.GetString("sound", this.Sound, sizeof(this.Sound));
+		if(this.Sound[0])
+		{
+			PrecacheSound(this.Sound);
+			this.SoundVolume = kv.GetFloat("volume", 1.0);
+			this.SoundLevel = kv.GetNum("soundlevel", SNDLEVEL_NORMAL);
+		}
+
+		if(kv.GotoFirstSubKey())
+		{
+			SoundEnum sound;
+			this.Sounds = new ArrayList(sizeof(SoundEnum));
+
+			do
+			{
+				sound.Setup(kv);
+				this.Sounds.PushArray(sound);
+			}
+			while(kv.GotoNextKey());
+			kv.GoBack();
+		}
+		else
+		{
+			this.Sounds = null;
+		}
+	}
+	void Delete()
+	{
+		delete this.Sounds;
+	}
 }
 
 enum struct TauntEnum
 {
-	char Name[MAXNAME];
-	int Models;
+	char Name[64];
+	ArrayList Models;
+
 	int Admin;
+	
+	bool Setup(KeyValues kv)
+	{
+		kv.GetString("admin", this.Name, sizeof(this.Name));
+		this.Admin = this.Name[0] ? ReadFlagString(this.Name) : 0;
+
+		kv.GetSectionName(this.Name, sizeof(this.Name));
+
+		ModelEnum model;
+		this.Models = new ArrayList(sizeof(ModelEnum));
+		if(kv.GotoFirstSubKey())
+		{
+			do
+			{
+				model.Setup(kv);
+				this.Models.PushArray(model);
+			}
+			while(kv.GotoNextKey());
+			kv.GoBack();
+		}
+
+		if(this.Models.Length)
+			return true;
+		
+		delete this.Models;
+		LogError("'%s' has no model entries", this.Name);
+		return false;
+	}
+	void Delete()
+	{
+		ModelEnum model;
+		int length = this.Models.Length;
+		for(int i; i < length; i++)
+		{
+			this.Models.GetArray(i, model);
+			model.Delete();
+		}
+
+		delete this.Models;
+	}
 }
 
-enum struct ClientEnum
-{
-	float EndAt;
-	int Taunt;
-	int Model;
-}
-
-SoundEnum Sound[MAXTAUNTS][MAXMODELS][MAXSOUNDS];
-ModelEnum Models[MAXTAUNTS][MAXMODELS];
-TauntEnum Taunt[MAXTAUNTS];
-ClientEnum Client[MAXTF2PLAYERS];
 Handle SDKPlayTaunt;
-int Taunts;
-bool Enabled;
+Handle SDKEquipWearable;
+ArrayList Taunts;
+Handle TauntTimer[MAXPLAYERS+1];
+int CurrentTaunt[MAXPLAYERS+1] = {-1, ...};
+int CurrentModel[MAXPLAYERS+1];
+bool LastAnims[MAXPLAYERS+1];
+char LastModel[MAXPLAYERS+1][PLATFORM_MAX_PATH];
+int WearableModel[MAXPLAYERS+1] = {-1, ...};
+RenderFx LastRender[MAXPLAYERS+1];
 
 public Plugin myinfo =
 {
 	name		=	"TF2: Custom Taunts",
 	author		=	"Batfoxkid",
 	description	=	"Custom taunts for players to use",
-	version		=	PLUGIN_VERSION
-};
-
-// SourceMod Events
+	version		=	PLUGIN_VERSION_FULL,
+	url			=	"github.com/Batfoxkid/TF2-Custom-Taunts"
+}
 
 public void OnPluginStart()
 {
 	GameData gameData = new GameData("tf2.tauntem");
 	if(gameData == INVALID_HANDLE)
-		SetFailState("Failed to find gamedata/tf2.tauntem.txt.");
+		SetFailState("Could not find gamedata/tf2.tauntem.txt");
 
 	StartPrepSDKCall(SDKCall_Player);
 	PrepSDKCall_SetFromConf(gameData, SDKConf_Signature, "CTFPlayer::PlayTauntSceneFromItem");
@@ -107,323 +209,198 @@ public void OnPluginStart()
 	PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
 	SDKPlayTaunt = EndPrepSDKCall();
 	if(SDKPlayTaunt == INVALID_HANDLE)
-		SetFailState("Failed to create call: CTFPlayer::PlayTauntSceneFromItem.");
+		SetFailState("Could not find CTFPlayer::PlayTauntSceneFromItem.");
 
 	delete gameData;
 
-	CreateConVar("customtaunts_version", PLUGIN_VERSION, "Custom Taunts Plugin Version", FCVAR_NOTIFY|FCVAR_DONTRECORD);
-
-	AddNormalSoundHook(HookSound);
+	gameData = new GameData("sm-tf2.games");
+	
+	StartPrepSDKCall(SDKCall_Player);
+	PrepSDKCall_SetVirtual(gameData.GetOffset("RemoveWearable") - 1);
+	PrepSDKCall_AddParameter(SDKType_CBaseEntity, SDKPass_Pointer);
+	SDKEquipWearable = EndPrepSDKCall();
+	if(!SDKEquipWearable)
+		SetFailState("Could not find RemoveWearable");
+	
+	delete gameData;
 
 	RegConsoleCmd("sm_taunt", CommandMenu, "Open a menu of taunts");
 	RegConsoleCmd("sm_taunts", CommandList, "View a list of taunt ids");
-	HookEvent("post_inventory_application", OnPlayerSpawn, EventHookMode_Pre);
-	HookEvent("player_death", OnPlayerDeath, EventHookMode_Post);
-	AddCommandListener(OnJoinClass, "joinclass");
-	AddCommandListener(OnJoinClass, "join_class");
+	AddCommandListener(OnTaunt, "taunt");
 
 	LoadTranslations("common.phrases");
 
+	CreateConVar("customtaunts_version", PLUGIN_VERSION, "Custom Taunts Plugin Version", FCVAR_NOTIFY|FCVAR_DONTRECORD);
+	
+	AddNormalSoundHook(HookSound);
 	HookUserMessage(GetUserMessageId("PlayerTauntSoundLoopStart"), HookTauntMessage, true);
-
-	for(int i; i<MAXTF2PLAYERS; i++)
-	{
-		Client[i].Taunt = -1;
-	}
 }
 
 public void OnConfigsExecuted()
 {
-	char buffer[PLATFORM_MAX_PATH];
-	BuildPath(Path_SM, buffer, PLATFORM_MAX_PATH, CONFIG_PATH);
-	if(!FileExists(buffer))
-		SetFailState("Failed to find %s.", CONFIG_PATH);
+	TauntEnum taunt;
 
+	if(Taunts)
+	{
+		int length = Taunts.Length;
+		for(int i; i < length; i++)
+		{
+			Taunts.GetArray(i, taunt);
+			taunt.Delete();
+		}
+
+		delete Taunts;
+	}
+
+	Taunts = new ArrayList(sizeof(TauntEnum));
+
+	char filepath[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, filepath, sizeof(filepath), FILE_TAUNTS);
+	if(!FileExists(filepath))
+	{
+		BuildPath(Path_SM, filepath, sizeof(filepath), "configs/customtaunts.cfg");
+		if(!FileExists(filepath))
+			BuildPath(Path_SM, filepath, sizeof(filepath), "configs/taunts.cfg");
+	}
+	
 	KeyValues kv = new KeyValues("customtaunts");
-	if(!kv.ImportFromFile(buffer))
-		SetFailState("Failed to import %s.", CONFIG_PATH);
+	kv.ImportFromFile(filepath);
 
-	Taunts = 0;
-	if(!kv.GotoFirstSubKey())
-		SetFailState("Incorrect format on %s.", CONFIG_PATH);
+	kv.GotoFirstSubKey();
 
 	do
 	{
-		kv.GetSectionName(Taunt[Taunts].Name, MAXNAME);
-		kv.GetString("admin", buffer, PLATFORM_MAX_PATH);
-		Taunt[Taunts].Admin = buffer[0] ? ReadFlagString(buffer) : 0;
-		if(!kv.GotoFirstSubKey())
-		{
-			LogError("Taunt '%s' has no models listed.", Taunt[Taunts].Name);
-			continue;
-		}
-
-		MODELS = 0;
-		do
-		{
-			kv.GetSectionName(Models[Taunts][MODELS].Replace, PLATFORM_MAX_PATH);
-			Models[Taunts][MODELS].Index = kv.GetNum("index");
-			if(!Models[Taunts][MODELS].Index)
-			{
-				LogError("Taunt '%s' with model '%s' has an invalid index.", Taunt[Taunts].Name, Models[Taunts][MODELS].Replace);
-				continue;
-			}
-
-			bool all = StrEqual(Models[Taunts][MODELS].Replace, "any", false);
-			if(!all)
-			{
-				Models[Taunts][MODELS].Class = TF2_GetClass(Models[Taunts][MODELS].Replace);
-				if(Models[Taunts][MODELS].Class != TFClass_Unknown)
-					all = true;
-			}
-
-			if(!all)
-			{
-				kv.GetString("model", Models[Taunts][MODELS].New, PLATFORM_MAX_PATH);
-				if(!Models[Taunts][MODELS].New[0])
-				{
-				}
-				else if(StrEqual(Models[Taunts][MODELS].New, Models[Taunts][MODELS].Replace, false))
-				{
-					Models[Taunts][MODELS].New[0] = 0;
-				}
-				else if(FileExists(Models[Taunts][MODELS].New, true))
-				{
-					PrecacheModel(Models[Taunts][MODELS].New, true);
-				}
-				else
-				{
-					LogError("Taunt '%s' with model '%s' does not exist.", Taunt[Taunts].Name, Models[Taunts][MODELS].Replace);
-					Models[Taunts][MODELS].New[0] = 0;
-				}
-			}
-			else
-			{
-				Models[Taunts][MODELS].Replace[0] = 0;
-				Models[Taunts][MODELS].New[0] = 0;
-			}
-
-			kv.GetString("sound", Models[Taunts][MODELS].Sound, PLATFORM_MAX_PATH);
-			FormatEx(buffer, PLATFORM_MAX_PATH, "sound/%s", Models[Taunts][MODELS].Sound);
-			if(!Models[Taunts][MODELS].Sound[0])
-			{
-			}
-			else if(FileExists(buffer, true))
-			{
-				PrecacheSound(Models[Taunts][MODELS].Sound, true);
-			}
-			else
-			{
-				LogError("Taunt '%s' with sound '%s' does not exist.", Taunt[Taunts].Name, Models[Taunts][MODELS].Sound);
-				Models[Taunts][MODELS].Sound[0] = 0;
-			}
-
-			Models[Taunts][MODELS].IsSoundBlock = (kv.GetNum("existing_sound_block", 0)) ? true : false;
-			Models[Taunts][MODELS].IsMusicBlock = (kv.GetNum("existing_music_block", 0)) ? true : false;
-			Models[Taunts][MODELS].IsHideWeapon = (kv.GetNum("hide_weapon", 0)) ? true : false;
-			Models[Taunts][MODELS].IsHideHat = (kv.GetNum("hide_hat", 0)) ? true : false;
-			Models[Taunts][MODELS].Speed = kv.GetFloat("speed", 1.0);
-			Models[Taunts][MODELS].Duration = kv.GetFloat("duration");
-
-			SOUNDS = 0;
-			if(!kv.GotoFirstSubKey())
-			{
-				MODELS++;
-				continue;
-			}
-
-			do
-			{
-				kv.GetSectionName(Sound[Taunts][MODELS][SOUNDS].Replace, PLATFORM_MAX_PATH);
-				kv.GetString("sound", Sound[Taunts][MODELS][SOUNDS].New, PLATFORM_MAX_PATH, "vo/null.mp3");
-				FormatEx(buffer, PLATFORM_MAX_PATH, "sound/%s", Sound[Taunts][MODELS][SOUNDS].New);
-				if (FileExists(buffer, true) && strcmp(buffer, "sound/vo/null.mp3") != 0)
-				{
-					PrecacheSound(Sound[Taunts][MODELS][SOUNDS].New, true);
-				}
-				SOUNDS++;
-			} while(SOUNDS<MAXSOUNDS && kv.GotoNextKey());
-			MODELS++;
-			kv.GoBack();
-		} while(MODELS<MAXMODELS && kv.GotoNextKey());
-		kv.GoBack();
-
-		if(!MODELS)
-		{
-			LogError("Taunt '%s' has no models correctly setup.", Taunt[Taunts].Name);
-			continue;
-		}
-
-		Taunts++;
-	} while(Taunts<MAXTAUNTS && kv.GotoNextKey());
+		if(taunt.Setup(kv))
+			Taunts.PushArray(taunt);
+	}
+	while(kv.GotoNextKey());
 
 	delete kv;
 
-	if(!Taunts)
-		SetFailState("Incorrect format on %s.", CONFIG_PATH);
+	if(!Taunts.Length)
+		SetFailState("'%s' has no taunt entries", filepath);
 }
 
 public void OnPluginEnd()
 {
-	for(int i=1; i<=MaxClients; i++)
+	for(int client = 1; client <= MaxClients; client++)
 	{
-		if(IsValidClient(i))
-			EndTaunt(i, true);
+		if(IsClientInGame(client))
+		{
+			TF2_RemoveCondition(client, TFCond_Taunting);
+			EndTaunt(client);
+		}
 	}
 }
 
-// Game Events
-
-public void OnClientPostAdminCheck(int client)
+public void OnClientDisconnect(int client)
 {
-	Client[client].EndAt = 0.0;
-	Client[client].Taunt = -1;
+	delete TauntTimer[client];
+	CurrentTaunt[client] = -1;
 }
 
 public void TF2_OnConditionRemoved(int client, TFCond condition)
 {
 	if(condition == TFCond_Taunting)
-		EndTaunt(client, false);
+		EndTaunt(client);
 }
 
-public Action OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast)
+Action HookTauntMessage(UserMsg msg_id, BfRead msg, const int[] players, int playersNum, bool reliable, bool init)
 {
-	int client = GetClientOfUserId(event.GetInt("userid"));
-	if(IsValidClient(client))
-		EndTaunt(client, true);
-
-	return Plugin_Continue;
-}
-
-public Action OnPlayerDeath(Event event, const char[] name, bool dontBroadcast)
-{
-	int client = GetClientOfUserId(event.GetInt("userid"));
-	if(IsValidClient(client))
-		EndTaunt(client, false);
-
-	return Plugin_Continue;
-}
-
-public Action OnJoinClass(int client, const char[] command, int args)
-{
-	if(Client[client].Taunt==-1 || !Models[Client[client].Taunt][Client[client].Model].Replace[0])
-		return Plugin_Continue;
-
-	EndTaunt(client, true);
-
-	/*
-	static char arg[16];
-	GetCmdArg(1, arg, sizeof(arg));
-	TFClassType class = TF2_GetClass(arg);
-	if(class != TFClass_Unknown)
-		SetEntProp(client, Prop_Send, "m_iDesiredPlayerClass", class);
-	*/
-
-	return Plugin_Continue;
-}
-
-public void OnGameFrame()
-{
-	if(!Enabled)
-		return;
-
-	float gameTime = GetGameTime();
-	Enabled = false;
-	for(int client=1; client<=MaxClients; client++)
+	int client = msg.ReadByte();
+	if(CurrentTaunt[client] != -1)
 	{
-		if(!IsValidClient(client) || !Client[client].EndAt)
-			continue;
+		static TauntEnum taunt;
+		Taunts.GetArray(CurrentTaunt[client], taunt);
 
-		Enabled = true;
-		if(Client[client].EndAt < gameTime)
-			EndTaunt(client, true);
+		static ModelEnum model;
+		taunt.Models.GetArray(CurrentModel[client], model);
+
+		if(model.BlockMusic)
+			return Plugin_Handled;
 	}
-}
-
-public Action HookTauntMessage(UserMsg msg_id, BfRead msg, const int[] players, int playersNum, bool reliable, bool init)
-{
-	int byte = msg.ReadByte();
-
-	if (Client[byte].Taunt < 0 || Client[byte].Model < 0)return Plugin_Continue;
-
-	if (Models[Client[byte].Taunt][Client[byte].Model].IsMusicBlock)return Plugin_Handled;
 
 	return Plugin_Continue;
 }
 
-public Action HookSound(int clients[MAXPLAYERS], int &numClients, char sound[PLATFORM_MAX_PATH], int &client, int &channel, float &volume, int &level, int &pitch, int &flags, char soundEntry[PLATFORM_MAX_PATH], int &seed)
+Action HookSound(int clients[MAXPLAYERS], int &numClients, char sample[PLATFORM_MAX_PATH], int &entity, int &channel, float &volume, int &level, int &pitch, int &flags, char soundEntry[PLATFORM_MAX_PATH], int &seed)
 {
-	if(!IsValidClient(client) || !TF2_IsPlayerInCondition(client, TFCond_Taunting) || Client[client].Taunt<0 || Client[client].Model<0)
+	if(entity < 1 || entity > MaxClients)
 		return Plugin_Continue;
 
-	for(int i; i<Models[Client[client].Taunt][Client[client].Model].Sounds; i++)
+	if(CurrentTaunt[entity] != -1)
 	{
-		if(StrContains(Sound[Client[client].Taunt][Client[client].Model][i].Replace, sound, false))
-			continue;
+		static TauntEnum taunt;
+		Taunts.GetArray(CurrentTaunt[entity], taunt);
 
-		if(!Sound[Client[client].Taunt][Client[client].Model][i].New[0])
+		static ModelEnum model;
+		taunt.Models.GetArray(CurrentModel[entity], model);
+
+		if(model.Sounds)
+		{
+			int length = model.Sounds.Length;
+			for(int i; i < length; i++)
+			{
+				static SoundEnum sound;
+				model.Sounds.GetArray(i, sound);
+
+				if(StrContains(sample, sound.Match, false) == -1)
+					continue;
+
+				if(!sound.Replace[0])
+					return Plugin_Stop;
+
+				strcopy(sample, sizeof(sample), sound.Replace);
+				return Plugin_Changed;
+			}
+		}
+
+		if(model.BlockSound && !StrEqual(model.Sound, sample))
 			return Plugin_Stop;
-
-		strcopy(sound, PLATFORM_MAX_PATH, Sound[Client[client].Taunt][Client[client].Model][i].New);
-		return Plugin_Changed;
 	}
 
-	if (Models[Client[client].Taunt][Client[client].Model].IsSoundBlock && !StrEqual(Models[Client[client].Taunt][Client[client].Model].Sound, sound))
-	{
-		return Plugin_Stop;
-	}
 	return Plugin_Continue;
 }
 
-// Taunt Events
-
-void EndTaunt(int client, bool remove)
+int GetTaunt(int client, int index, ModelEnum model = {})
 {
-	Client[client].EndAt = 0.0;
-	TF2Attrib_SetByDefIndex(client, 201, 1.0);
-	if(remove && IsPlayerAlive(client))
-		TF2_RemoveCondition(client, TFCond_Taunting);
+	TauntEnum taunt;
+	Taunts.GetArray(index, taunt);
 
-	if(Client[client].Taunt < 0)
-		return;
+	char filepath[PLATFORM_MAX_PATH];
+	GetClientModel(client, filepath, sizeof(filepath));
+	ReplaceString(filepath, sizeof(filepath), "\\", "/");
+	TFClassType class = TF2_GetPlayerClass(client);
 
-	if(Client[client].Model < 0)
+	int length = taunt.Models.Length;
+	for(int i; i < length; i++)
 	{
-		Client[client].Taunt = -1;
-		return;
+		taunt.Models.GetArray(i, model);
+
+		if(model.Class != TFClass_Unknown)
+		{
+			if(model.Class != class)
+				continue;
+		}
+		else if(model.Match[0])
+		{
+			if(!StrEqual(model.Match, filepath, false))
+				continue;
+		}
+
+		return i;
 	}
 
-	if(Models[Client[client].Taunt][Client[client].Model].Sound[0])
-		StopSound(client, SNDCHAN_AUTO, Models[Client[client].Taunt][Client[client].Model].Sound);
-
-	if(!Models[Client[client].Taunt][Client[client].Model].Replace[0])
-	{
-		Client[client].Taunt = -1;
-		return;
-	}
-
-	HideWeapons(client, true);
-	HideHat(client, true);
-
-	switch (TF2_GetPlayerClass(client))
-	{
-		case TFClass_Scout:SetVariantString("models/player/scout.mdl");
-		case TFClass_Pyro:SetVariantString("models/player/pyro.mdl");
-		case TFClass_DemoMan:SetVariantString("models/player/demo.mdl");
-		case TFClass_Heavy:SetVariantString("models/player/heavy.mdl");
-		case TFClass_Engineer:SetVariantString("models/player/engineer.mdl");
-		case TFClass_Medic:SetVariantString("models/player/medic.mdl");
-		case TFClass_Sniper:SetVariantString("models/player/sniper.mdl");
-		case TFClass_Spy:SetVariantString("models/player/spy.mdl");
-		default:SetVariantString("models/player/soldier.mdl");
-	}
-	AcceptEntityInput(client, "SetCustomModel");
-	SetEntProp(client, Prop_Send, "m_bUseClassAnimations", 1);
-	Client[client].Taunt = -1;
+	return -1;
 }
 
-bool StartTaunt(int client, int taunt, int model)
+bool StartTaunt(int client, int index)
 {
+	ModelEnum model;
+	int modelIndex = GetTaunt(client, index, model);
+	if(modelIndex == -1)
+		return false;
+
 	static Handle item;
 	if(item == INVALID_HANDLE)
 	{
@@ -433,202 +410,379 @@ bool StartTaunt(int client, int taunt, int model)
 		TF2Items_SetLevel(item, 1);
 	}
 
-	TF2Items_SetItemIndex(item, Models[taunt][model].Index);
+	TF2Items_SetItemIndex(item, model.Index);
 	int entity = TF2Items_GiveNamedItem(client, item);
-	if(!IsValidEntity(entity))
-	{
-		LogError("Couldn't create entity for taunt");
+	if(entity == -1)
 		return false;
-	}
-
-	int offset = GetEntSendPropOffs(entity, "m_Item", true);
-	if(offset <= 0)
+	
+	TF2_RemoveCondition(client, TFCond_Taunting);
+	EndTaunt(client);
+	
+	static int offset;
+	if(!offset)
+		offset = GetEntSendPropOffs(entity, "m_Item", true);
+	
+	if(offset < 1)
 	{
-		LogError("Couldn't find m_Item for taunt item");
+		SetFailState("Could not find m_Item");
 		return false;
-	}
-
-	Address address = GetEntityAddress(entity);
-	if(address == Address_Null)
-	{
-		LogError("Couldn't find entity address for taunt item");
-		return false;
-	}
-
-	if(Models[taunt][model].Duration > 0)
-	{
-		TF2Attrib_SetByDefIndex(client, 201, 0.01);	// Extends the taunt's lifetime
-	}
-	else
-	{
-		TF2Attrib_SetByDefIndex(client, 201, Models[taunt][model].Speed);
-	}
-
-	address += view_as<Address>(offset);
-	if(!SDKCall(SDKPlayTaunt, client, address))
-	{
-		AcceptEntityInput(entity, "Kill");
-		TF2Attrib_SetByDefIndex(client, 201, 1.0);
-		return true;
-	}
-	AcceptEntityInput(entity, "Kill");
-
-	if(Models[taunt][model].New[0])
-	{
-		SetVariantString(Models[taunt][model].New);
-		AcceptEntityInput(client, "SetCustomModel");
-		SetEntProp(client, Prop_Send, "m_bUseClassAnimations", 1);
-	}
-
-	if(Models[taunt][model].Sound[0])
-		EmitSoundToAll(Models[taunt][model].Sound, client);
-
-	if(Models[taunt][model].Duration > 0)
-		TF2Attrib_SetByDefIndex(client, 201, Models[taunt][model].Speed);
-
-	if (Models[taunt][model].IsHideWeapon)
-	{
-		HideWeapons(client, false);
-	}
-
-	if (Models[taunt][model].IsHideHat)
-	{
-		HideHat(client, false);
-	}
-
-	Client[client].Taunt = taunt;
-	Client[client].Model = model;
-
-	Client[client].EndAt = Models[taunt][model].Duration>0 ? Models[taunt][model].Duration+GetGameTime() : 0.0;
-	Enabled = true;
-	return false;
-}
-
-// Menu Events
-
-public Action CommandMenu(int client, int args)
-{
-	static char buffer[MAX_TARGET_LENGTH];
-	if(!args && client)
-	{
-		if(!IsPlayerAlive(client) || TF2_IsPlayerInCondition(client, TFCond_Taunting))
-			return Plugin_Handled;
-
-		Menu menu = new Menu(CommandMenuH);
-		menu.SetTitle("Taunt Menu\n ");
-
-		for(int i; i<Taunts; i++)
-		{
-			if(!CheckTauntAccess(client, i) || CheckTauntModel(client, i)==-1)
-				continue;
-
-			IntToString(i, buffer, sizeof(buffer));
-			menu.AddItem(buffer, Taunt[i].Name);
-		}
-
-		menu.ExitButton = true;
-		menu.Display(client, MENU_TIME_FOREVER);
-		return Plugin_Handled;
-	}
-
-	if(client && !CheckCommandAccess(client, "customtaunts_targetting", ADMFLAG_CHEATS))
-	{
-		if(args != 1)
-		{
-			ReplyToCommand(client, "[SM] Usage: sm_taunt <tauntid>");
-			return Plugin_Handled;
-		}
-
-		GetCmdArg(1, buffer, sizeof(buffer));
-		int taunt = StringToInt(buffer);
-		if((!taunt && !StrEqual(buffer, "0")))
-		{
-			for(int i; i<Taunts; i++)
-			{
-				if(StrContains(buffer, Taunt[i].Name, false))
-					continue;
-
-				taunt = i;
-				break;
-			}
-		}
-
-		if(!CheckTauntAccess(client, taunt))
-		{
-			ReplyToCommand(client, "[SM] Invalid Taunt ID");
-			return Plugin_Handled;
-		}
-
-		int model = CheckTauntModel(client, taunt);
-		if(model == -1)
-		{
-			ReplyToCommand(client, "[SM] Invalid Class or Model");
-			return Plugin_Handled;
-		}
-
-		StartTaunt(client, taunt, model);
-		return Plugin_Handled;
-	}
-
-	if(args != 2)
-	{
-		ReplyToCommand(client, "[SM] Usage: sm_taunt <client> <tauntid>");
-		return Plugin_Handled;
-	}
-
-	GetCmdArg(2, buffer, sizeof(buffer));
-	int taunt = StringToInt(buffer);
-	if((!taunt && !StrEqual(buffer, "0")))
-	{
-		for(int i; i<Taunts; i++)
-		{
-			if(StrContains(buffer, Taunt[i].Name, false))
-				continue;
-
-			taunt = i;
-			break;
-		}
-	}
-
-	if(!CheckTauntAccess(client, taunt))
-	{
-		ReplyToCommand(client, "[SM] Invalid Taunt ID");
-		return Plugin_Handled;
-	}
-
-	GetCmdArg(1, buffer, sizeof(buffer));
-	static char targetName[MAX_TARGET_LENGTH];
-	int targets[MAXTF2PLAYERS], matches;
-	bool tn_is_ml;
-
-	if((matches=ProcessTargetString(buffer, client, targets, sizeof(targets), COMMAND_FILTER_ALIVE, targetName, sizeof(targetName), tn_is_ml)) < 1)
-	{
-		ReplyToTargetError(client, matches);
-		return Plugin_Handled;
-	}
-
-	for(int target; target<matches; target++)
-	{
-		if(IsClientSourceTV(targets[target]) || IsClientReplay(targets[target]))
-			continue;
-
-		int model = CheckTauntModel(targets[target], taunt);
-		if(model != -1)
-			StartTaunt(targets[target], taunt, model);
 	}
 	
-	if(tn_is_ml)
+	Address address = GetEntityAddress(entity);
+	if(address == Address_Null)
+		return false;
+	
+	if(model.Duration > 0)
 	{
-		ShowActivity2(client, "[SM] ", "Forced taunt on %t", targetName);
+		TF2Attrib_SetByDefIndex(client, 201, 0.01);
 	}
 	else
 	{
-		ShowActivity2(client, "[SM] ", "Forced taunt on %s", targetName);
+		TF2Attrib_SetByDefIndex(client, 201, model.Speed);
 	}
+	
+	address += view_as<Address>(offset);
+	if(SDKCall(SDKPlayTaunt, client, address))
+	{
+		if(model.BodyModel)
+		{
+			char buffer[PLATFORM_MAX_PATH];
+			GetClientModel(client, buffer, sizeof(buffer));
+			if(buffer[0])
+			{
+				// Apply a fake playermodel
+				int playermodel = CreateEntityByName("tf_wearable");
+				if(playermodel != -1)
+				{
+					SetEntProp(playermodel, Prop_Send, "m_nModelIndex", PrecacheModel(buffer));
+					SetEntProp(playermodel, Prop_Send, "m_fEffects", 129);
+					SetEntProp(playermodel, Prop_Send, "m_iTeamNum", GetEntProp(client, Prop_Send, "m_iTeamNum"));
+					SetEntProp(playermodel, Prop_Send, "m_nSkin", GetEntProp(client, Prop_Send, "m_nSkin"));
+					SetEntProp(playermodel, Prop_Send, "m_usSolidFlags", 4);
+					SetEntityCollisionGroup(playermodel, 11);
+					SetEntProp(playermodel, Prop_Send, "m_bValidatedAttachedEntity", true);
+					DispatchSpawn(playermodel);
+					SetVariantString("!activator");
+					ActivateEntity(playermodel);
+					SDKCall(SDKEquipWearable, client, playermodel);
+					WearableModel[client] = EntIndexToEntRef(playermodel);
+				}
+			}
+
+			LastRender[client] = GetEntityRenderFx(client);
+			SetEntityRenderFx(client, RENDERFX_FADE_FAST);
+		}
+		
+		if(model.Replace[0])
+		{
+			// Replace the model, remember previous custom model
+			LastAnims[client] = view_as<bool>(GetEntProp(client, Prop_Send, "m_bUseClassAnimations"));
+			GetEntPropString(client, Prop_Send, "m_iszCustomModel", LastModel[client], sizeof(LastModel[]));
+
+			SetVariantString(model.Replace);
+			AcceptEntityInput(client, "SetCustomModelWithClassAnimations");
+		}
+
+		if(model.Sound[0])
+			EmitSoundToAll(model.Sound, client, SNDCHAN_STATIC, model.SoundLevel, _, model.SoundVolume);
+
+		if(model.Duration > 0)
+		{
+			TauntTimer[client] = CreateTimer(model.Duration, Timer_EndTaunt, client);
+			TF2Attrib_SetByDefIndex(client, 201, model.Speed);
+		}
+
+		if(model.HideWeapon)
+			ToggleWeapons(client, false);
+
+		if(model.HideCosmetic)
+			ToggleCosmetics(client, false);
+		
+		CurrentTaunt[client] = index;
+		CurrentModel[client] = modelIndex;
+	}
+	else
+	{
+		TF2Attrib_SetByDefIndex(client, 201, 1.0);
+	}
+
+	AcceptEntityInput(entity, "Kill");
+	return true;
+}
+
+Action Timer_EndTaunt(Handle timer, int client)
+{
+	TauntTimer[client] = null;
+	TF2_RemoveCondition(client, TFCond_Taunting);
+	return Plugin_Continue;
+}
+
+void EndTaunt(int client)
+{
+	delete TauntTimer[client];
+
+	if(CurrentTaunt[client] != -1)
+	{
+		if(CurrentModel[client] != -1)
+		{
+			TauntEnum taunt;
+			Taunts.GetArray(CurrentTaunt[client], taunt);
+
+			ModelEnum model;
+			taunt.Models.GetArray(CurrentModel[client], model);
+
+			if(model.Sound[0])
+				StopSound(client, SNDCHAN_STATIC, model.Sound);
+			
+			if(WearableModel[client] != -1)
+			{
+				// Remove fake playermodel
+				int entity = EntRefToEntIndex(WearableModel[client]);
+				if(entity != -1)
+					TF2_RemoveWearable(client, entity);
+				
+				WearableModel[client] = -1;
+
+				if(GetEntityRenderFx(client) == RENDERFX_FADE_FAST)
+					SetEntityRenderFx(client, LastRender[client]);
+			}
+			
+			if(model.Replace[0])
+			{
+				char buffer[PLATFORM_MAX_PATH];
+				GetEntPropString(client, Prop_Send, "m_iszCustomModel", buffer, sizeof(buffer));
+				if(StrEqual(buffer, model.Replace))
+				{
+					// Check if our custom model is the same
+					// If it was changed, probably another plugin
+					SetVariantString(LastModel[client]);
+					AcceptEntityInput(client, "SetCustomModel");
+					SetEntProp(client, Prop_Send, "m_bUseClassAnimations", LastAnims[client]);
+				}
+			}
+
+			if(model.HideWeapon)
+				ToggleWeapons(client, true);
+
+			if(model.HideCosmetic)
+				ToggleCosmetics(client, true);
+			
+			TF2Attrib_SetByDefIndex(client, 201, 1.0);
+		}
+
+		CurrentTaunt[client] = -1;
+	}
+}
+
+bool CanAccessTaunt(int client, int index)
+{
+	TauntEnum taunt;
+	Taunts.GetArray(index, taunt);
+
+	if(taunt.Admin)
+	{
+		if(!CheckCommandAccess(client, "customtaunts_all", taunt.Admin, true))
+			return false;
+	}
+
+	return true;
+}
+
+void ToggleWeapons(int client, bool toggle)
+{
+	static int max;
+	if(!max)
+		max = GetEntPropArraySize(client, Prop_Send, "m_hMyWeapons");
+
+	for(int i; i < max; i++)
+	{
+		int weapon = GetEntPropEnt(client, Prop_Send, "m_hMyWeapons", i);
+		if(weapon != -1)
+		{
+			SetEntityRenderMode(weapon, (toggle ? RENDER_NORMAL : RENDER_ENVIRONMENTAL));
+			SetEntityRenderColor(weapon, 255, 255, 255, (toggle ? 255 : 5));
+		}
+	}
+}
+
+void ToggleCosmetics(int client, bool toggle)
+{
+	int entity = -1;
+	while((entity = FindEntityByClassname(entity, "tf_wearable")) != -1)
+	{
+		if(GetEntPropEnt(entity, Prop_Send, "m_hOwnerEntity") == client)
+		{
+			SetEntityRenderMode(entity, (toggle ? RENDER_NORMAL : RENDER_ENVIRONMENTAL));
+			SetEntityRenderColor(entity, 255, 255, 255, (toggle ? 255 : 0));
+		}
+	}
+
+	entity = -1;
+	while((entity = FindEntityByClassname(entity, "tf_powerup_bottle")) != -1)
+	{
+		if(GetEntPropEnt(entity, Prop_Send, "m_hOwnerEntity") == client)
+		{
+			SetEntityRenderMode(entity, (toggle ? RENDER_NORMAL : RENDER_ENVIRONMENTAL));
+			SetEntityRenderColor(entity, 255, 255, 255, (toggle ? 255 : 0));
+		}
+	}
+}
+
+Action OnTaunt(int client, const char[] command, int argc)
+{
+	if(IsPlayerAlive(client) && !TF2_IsPlayerInCondition(client, TFCond_Taunting))
+	{
+		int target = GetClientAimTarget(client, true);
+		if(target != -1 && CurrentTaunt[target] != -1)
+		{
+			// Join in custom taunts if their infinite duration
+			TauntEnum taunt;
+			Taunts.GetArray(CurrentTaunt[target], taunt);
+
+			int index = GetTaunt(client, CurrentTaunt[target]);
+			if(index != -1)
+			{
+				ModelEnum model;
+				taunt.Models.GetArray(index, model);
+				if(model.Duration <= 0.0)
+					StartTaunt(client, CurrentTaunt[target]);
+			}
+			
+			return Plugin_Handled;
+		}
+	}
+	return Plugin_Continue;
+}
+
+Action CommandMenu(int client, int args)
+{
+	char buffer[MAX_TARGET_LENGTH];
+	
+	switch(args)
+	{
+		case 0:
+		{
+			if(client)
+			{
+				Menu menu = new Menu(CommandMenuH);
+				menu.SetTitle("Taunt Menu\n ");
+
+				TauntEnum taunt;
+				int length = Taunts.Length;
+				for(int i; i < length; i++)
+				{
+					if(!CanAccessTaunt(client, i) || GetTaunt(client, i) == -1)
+						continue;
+
+					IntToString(i, buffer, sizeof(buffer));
+					Taunts.GetArray(i, taunt);
+					menu.AddItem(buffer, taunt.Name);
+				}
+
+				if(!menu.ItemCount)
+					menu.AddItem("-1", "None", ITEMDRAW_DISABLED);
+
+				menu.ExitButton = true;
+				menu.Display(client, MENU_TIME_FOREVER);
+				return Plugin_Handled;
+			}
+		}
+		case 1:
+		{
+			if(client)
+			{
+				GetCmdArg(1, buffer, sizeof(buffer));
+				int index = StringToInt(buffer);
+				
+				int length = Taunts.Length;
+				if(index >= 0 && index < length && CanAccessTaunt(client, index) && GetTaunt(client, index) != -1)
+				{
+					if(IsPlayerAlive(client) && !TF2_IsPlayerInCondition(client, TFCond_Taunting))
+						StartTaunt(client, index);
+				}
+				else
+				{
+					ReplyToCommand(client, "[SM] Invalid taunt for this class");
+				}
+
+				return Plugin_Handled;
+			}
+		}
+		case 2:
+		{
+			if(client == 0 || CheckCommandAccess(client, "customtaunts_targetting", ADMFLAG_CHEATS))
+			{
+				GetCmdArg(1, buffer, sizeof(buffer));
+				int index = StringToInt(buffer);
+
+				int length = Taunts.Length;
+				if(index >= 0 && index < length && CanAccessTaunt(client, index))
+				{
+					GetCmdArg(2, buffer, sizeof(buffer));
+					char targetName[MAX_TARGET_LENGTH];
+					int targets[MAXPLAYERS], matches;
+					bool tn_is_ml;
+
+					if((matches=ProcessTargetString(buffer, client, targets, sizeof(targets), COMMAND_FILTER_ALIVE, targetName, sizeof(targetName), tn_is_ml)) < 1)
+					{
+						ReplyToTargetError(client, matches);
+						return Plugin_Handled;
+					}
+
+					bool failed = true;
+					for(int target; target < matches; target++)
+					{
+						if(StartTaunt(targets[target], index))
+							failed = false;
+					}
+
+					if(failed)
+					{
+						ReplyToCommand(client, "[SM] Invalid taunt for this class");
+					}
+					else if(tn_is_ml)
+					{
+						ShowActivity2(client, "[SM] ", "Forced taunt on %t", targetName);
+					}
+					else
+					{
+						ShowActivity2(client, "[SM] ", "Forced taunt on %s", targetName);
+					}
+				}
+				else
+				{
+					ReplyToCommand(client, "[SM] Invalid taunt id");
+				}
+			}
+			else
+			{
+				ReplyToCommand(client, "[SM] Usage: sm_taunt [tauntid]");
+			}
+
+			return Plugin_Handled;
+		}
+		default:
+		{
+			if(client != 0)
+			{
+				if(CheckCommandAccess(client, "customtaunts_targetting", ADMFLAG_CHEATS))
+				{
+					ReplyToCommand(client, "[SM] Usage: sm_taunt [tauntid] [target]");
+				}
+				else
+				{
+					ReplyToCommand(client, "[SM] Usage: sm_taunt [tauntid]");
+				}
+				return Plugin_Handled;
+			}
+		}
+	}
+
+	ReplyToCommand(client, "[SM] Usage: sm_taunt <tauntid> <target>");
 	return Plugin_Handled;
 }
 
-public int CommandMenuH(Menu menu, MenuAction action, int client, int choice)
+int CommandMenuH(Menu menu, MenuAction action, int client, int choice)
 {
 	switch(action)
 	{
@@ -638,163 +792,31 @@ public int CommandMenuH(Menu menu, MenuAction action, int client, int choice)
 		}
 		case MenuAction_Select:
 		{
-			static char buffer[8];
+			char buffer[16];
 			menu.GetItem(choice, buffer, sizeof(buffer));
-			int taunt = StringToInt(buffer);
-			if(!CheckTauntAccess(client, taunt))
-			{
-				ReplyToCommand(client, "[SM] You no longer have access to this taunt");
-				return 0;
-			}
 
-			int model = CheckTauntModel(client, taunt);
-			if(model == -1)
-			{
-				ReplyToCommand(client, "[SM] You no longer use this taunt");
-				return 0;
-			}
-
-			if(StartTaunt(client, taunt, model))
-				CommandMenu(client, 0);
+			int index = StringToInt(buffer);
+			FakeClientCommand(client, "sm_taunt %d", index);
 		}
 	}
 	return 0;
 }
 
-public Action CommandList(int client, int args)
+Action CommandList(int client, int args)
 {
-	for(int i; i<Taunts; i++)
+	TauntEnum taunt;
+	int length = Taunts.Length;
+	for(int i; i < length; i++)
 	{
-		if(CheckTauntAccess(client, i))
-			PrintToConsole(client, "%i - %s", i, Taunt[i].Name);
+		if(CanAccessTaunt(client, i))
+		{
+			Taunts.GetArray(i, taunt);
+			PrintToConsole(client, "#%d - %s", i, taunt.Name);
+		}
 	}
 
 	if(GetCmdReplySource() == SM_REPLY_TO_CHAT)
 		ReplyToCommand(client, "[SM] %t", "See console for output");
 
 	return Plugin_Handled;
-}
-
-// Stocks
-
-stock bool CheckTauntAccess(int client, int taunt)
-{
-	if(taunt<0 || taunt>=Taunts)
-		return false;
-
-	if(Taunt[taunt].Admin && !CheckCommandAccess(client, "customtaunts_all", Taunt[taunt].Admin, true))
-		return false;
-
-	return true;
-}
-
-stock int CheckTauntModel(int client, int taunt)
-{
-	static char model[PLATFORM_MAX_PATH];
-	GetClientModel(client, model, PLATFORM_MAX_PATH);
-	TFClassType class = TF2_GetPlayerClass(client);
-	for(int i; i<Taunt[taunt].Models; i++)
-	{
-		if(Models[taunt][i].Class != TFClass_Unknown)
-		{
-			if(Models[taunt][i].Class == class)
-				return i;
-
-			continue;
-		}
-
-		if(!Models[taunt][i].Replace[0])
-			return i;
-
-		if(StrEqual(Models[taunt][i].Replace, model, false))
-			return i;
-	}
-	return -1;
-}
-
-stock bool IsValidClient(int client)
-{
-	if(client<=0 || client>MaxClients)
-		return false;
-
-	if(!IsClientInGame(client))
-		return false;
-
-	if(GetEntProp(client, Prop_Send, "m_bIsCoaching"))
-		return false;
-
-	if(IsClientSourceTV(client) || IsClientReplay(client))
-		return false;
-
-	return true;
-}
-
-stock void HideWeapons(int client, bool unhide = false)
-{
-	HideWeaponWearables(client, unhide);
-	int m_hMyWeapons = FindSendPropInfo("CTFPlayer", "m_hMyWeapons");
-	
-	char classname[64];
-	for (int i = 0, weapon; i < 47; i += 4)
-	{
-		weapon = GetEntDataEnt2(client, m_hMyWeapons + i);
-		
-		if (weapon > MaxClients && IsValidEdict(weapon) && GetEdictClassname(weapon, classname, sizeof(classname)) && StrContains(classname, "weapon") != -1)
-		{
-			SetEntityRenderMode(weapon, (unhide ? RENDER_NORMAL : RENDER_ENVIRONMENTAL));
-			SetEntityRenderColor(weapon, 255, 255, 255, (unhide ? 255 : 5));
-		}
-	}
-}
-stock void HideWeaponWearables(int client, bool unhide = false)
-{
-	int edict = MaxClients + 1;
-	
-	char netclass[32];
-	while ((edict = FindEntityByClassname(edict, "tf_wearable")) != -1)
-	{
-		if (GetEntityNetClass(edict, netclass, sizeof(netclass)) && strcmp(netclass, "CTFWearable") == 0)
-		{
-			int idx = GetEntProp(edict, Prop_Send, "m_iItemDefinitionIndex");
-			if (idx != 57 && idx != 133 && idx != 231 && idx != 444 && idx != 405 && idx != 608 && idx != 642)continue;
-			if (GetEntPropEnt(edict, Prop_Send, "m_hOwnerEntity") == client)
-			{
-				SetEntityRenderMode(edict, (unhide ? RENDER_NORMAL : RENDER_ENVIRONMENTAL));
-				SetEntityRenderColor(edict, 255, 255, 255, (unhide ? 255 : 0));
-			}
-		}
-	}
-}
-
-stock void HideHat(int client, bool unhide = false)
-{
-	int edict = MaxClients + 1;
-	char netclass[32];
-	
-	while ((edict = FindEntityByClassname(edict, "tf_wearable")) != -1)
-	{
-		
-		if (GetEntityNetClass(edict, netclass, sizeof(netclass)) && strcmp(netclass, "CTFWearable") == 0)
-		{
-			int idx = GetEntProp(edict, Prop_Send, "m_iItemDefinitionIndex");
-			if (idx != 57 && idx != 133 && idx != 231 && idx != 444 && idx != 405 && idx != 608 && idx != 642 && GetEntPropEnt(edict, Prop_Send, "m_hOwnerEntity") == client)
-			{
-				SetEntityRenderMode(edict, (unhide ? RENDER_NORMAL : RENDER_ENVIRONMENTAL));
-				SetEntityRenderColor(edict, 255, 255, 255, (unhide ? 255 : 0));
-			}
-		}
-	}
-	edict = MaxClients + 1;
-	while ((edict = FindEntityByClassname(edict, "tf_powerup_bottle")) != -1)
-	{
-		if (GetEntityNetClass(edict, netclass, sizeof(netclass)) && strcmp(netclass, "CTFPowerupBottle") == 0)
-		{
-			int idx = GetEntProp(edict, Prop_Send, "m_iItemDefinitionIndex");
-			if (idx != 57 && idx != 133 && idx != 231 && idx != 444 && idx != 405 && idx != 608 && idx != 642 && GetEntPropEnt(edict, Prop_Send, "m_hOwnerEntity") == client)
-			{
-				SetEntityRenderMode(edict, (unhide ? RENDER_NORMAL : RENDER_ENVIRONMENTAL));
-				SetEntityRenderColor(edict, 255, 255, 255, (unhide ? 255 : 0));
-			}
-		}
-	}
 }

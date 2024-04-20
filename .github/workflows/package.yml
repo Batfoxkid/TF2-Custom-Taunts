@@ -1,5 +1,8 @@
 name: Package
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: master
@@ -9,32 +12,36 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout
+      - name: Install Checkout
         uses: actions/checkout@v1
       
-      - name: Environments
-        run: |
-          echo "SM_VERSION=1.10" >> $GITHUB_ENV
+      - name: Install Setup SP
+        uses: rumblefrog/setup-sp@master
+        with:
+          version: '1.11.x'
       
-      - name: Install
+      - name: Get GitHub Env
         run: |
-          bash scripts/install.sh
-      
-      - name: Set Version
+          echo "PLUGIN_VERSION_REVISION<<EOF" >> $GITHUB_ENV
+          git rev-list --count HEAD >> $GITHUB_ENV
+          echo 'EOF' >> $GITHUB_ENV
+
+      - name: Install Misc
         run: |
-          bash scripts/date.sh
+          cd addons/sourcemod/scripting/include
+          wget "https://raw.githubusercontent.com/FlaminSarge/tf2attributes/master/scripting/include/tf2attributes.inc"
+          wget "https://raw.githubusercontent.com/nosoop/SMExt-TF2Items/main/pawn/tf2items.inc"
+        working-directory: ./
       
       - name: Compile
-        run: |
-          cd build/addons/sourcemod/scripting
-          ./spcomp tf2_custom_taunts.sp -o ../plugins/tf2_custom_taunts.smx
+        run: spcomp -E -O2 -v2 -i "include" -o "tf2_custom_taunts" tf2_custom_taunts.sp
+        working-directory: addons/sourcemod/scripting
       
-      - name: Package
-        run: |
-          bash scripts/package.sh
-      
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@master
+      - name: Release
+        uses: softprops/action-gh-release@master
         with:
-          name: TF2-Custom-Taunts-${{env.DATE_VERSION}}
-          path: ./build/package
+          tag_name: ${{env.PLUGIN_VERSION}}.${{env.PLUGIN_VERSION_REVISION}}
+          files: |
+            addons/sourcemod/scripting/tf2_custom_taunts.smx
+            addons/sourcemod/gamedata/tf2.tauntem.txt
+            addons/sourcemod/configs/custom_taunts/taunts.cfg
