@@ -25,6 +25,11 @@ jobs:
           echo "PLUGIN_VERSION_REVISION<<EOF" >> $GITHUB_ENV
           git rev-list --count HEAD >> $GITHUB_ENV
           echo 'EOF' >> $GITHUB_ENV
+          cd addons/sourcemod/scripting
+          export PLUGIN_VERSION=$(sed -En '/#define PLUGIN_VERSION\W/p' tf2_custom_taunts.sp)
+          echo "PLUGIN_VERSION<<EOF" >> $GITHUB_ENV
+          echo $PLUGIN_VERSION | grep -o '[0-9]*' >> $GITHUB_ENV
+          echo 'EOF' >> $GITHUB_ENV
 
       - name: Install Misc
         run: |
