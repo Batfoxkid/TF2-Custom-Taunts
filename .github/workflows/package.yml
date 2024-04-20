@@ -28,6 +28,7 @@ jobs:
 
       - name: Install Misc
         run: |
+          mkdir -p addons/sourcemod/scripting/include
           cd addons/sourcemod/scripting/include
           wget "https://raw.githubusercontent.com/FlaminSarge/tf2attributes/master/scripting/include/tf2attributes.inc"
           wget "https://raw.githubusercontent.com/nosoop/SMExt-TF2Items/main/pawn/tf2items.inc"
