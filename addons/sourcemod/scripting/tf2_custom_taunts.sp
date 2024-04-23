@@ -54,38 +54,34 @@ enum struct ModelEnum
 		this.Index = kv.GetNum("index");
 
 		bool all = StrEqual(this.Match, "any", false);
-		if(!all)
+		if(all)
+		{
+			this.Match[0] = 0;
+		}
+		else
 		{
 			this.Class = TF2_GetClass(this.Match);
 			if(this.Class != TFClass_Unknown)
 				all = true;
 		}
 		
-		if(all)
+		kv.GetString("model", this.Replace, sizeof(this.Replace));
+		if(this.Replace[0])
 		{
-			this.Match[0] = 0;
-			this.Replace[0] = 0;
-		}
-		else
-		{
-			kv.GetString("model", this.Replace, sizeof(this.Replace));
-			if(this.Replace[0])
-			{
-				ReplaceString(this.Replace, sizeof(this.Replace), "\\", "/");
+			ReplaceString(this.Replace, sizeof(this.Replace), "\\", "/");
 
-				if(StrEqual(this.Replace, this.Match, false))
-				{
-					this.Replace[0] = 0;
-				}
-				else if(FileExists(this.Replace, true))
-				{
-					PrecacheModel(this.Replace);
-				}
-				else
-				{
-					LogError("'%s' has missing model '%s'.", this.Match, this.Replace);
-					this.Replace[0] = 0;
-				}
+			if(StrEqual(this.Replace, this.Match, false))
+			{
+				this.Replace[0] = 0;
+			}
+			else if(FileExists(this.Replace, true))
+			{
+				PrecacheModel(this.Replace);
+			}
+			else
+			{
+				LogError("'%s' has missing model '%s'.", this.Match, this.Replace);
+				this.Replace[0] = 0;
 			}
 		}
 
